@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>800</width><height>580</height></rect>
+  </property>
+  <property name="windowTitle">
+   <string>STM32 Serial GUI</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <!-- Top bar: puerto, baudrate, modo, conectar -->
+    <item>
+     <layout class="QHBoxLayout" name="topLayout">
+      <item><widget class="QComboBox" name="cbPort"/></item>
+      <item><widget class="QComboBox" name="cbBaudRate"/></item>
+      <item><widget class="QLabel" name="lblMode"><property name="text"><string>Modo:</string></property></widget></item>
+      <item>
+       <widget class="QComboBox" name="cbMode">
+        <item><property name="text"><string>RS-232 (solo lectura)</string></property></item>
+        <item><property name="text"><string>RS-485 (lectura+control)</string></property></item>
+       </widget>
+      </item>
+      <item><widget class="QPushButton" name="btnConnect"><property name="text"><string>Conectar</string></property></widget></item>
+     </layout>
+    </item>
+    <!-- Log de tramas y salidas digitales -->
+    <item>
+     <layout class="QHBoxLayout" name="outputLayout">
+      <item>
+       <widget class="QTextEdit" name="txtRawData">
+        <property name="readOnly"><bool>true</bool></property>
+       </widget>
+      </item>
+      <item><widget class="QCheckBox" name="chkOut1"><property name="text"><string>Out 1</string></property></widget></item>
+      <item><widget class="QCheckBox" name="chkOut2"><property name="text"><string>Out 2</string></property></widget></item>
+      <item><widget class="QCheckBox" name="chkOut3"><property name="text"><string>Out 3</string></property></widget></item>
+     </layout>
+    </item>
+    <!-- Controles PWM con valor decimal -->
+    <item>
+     <layout class="QHBoxLayout" name="pwmLayout">
+      <item><widget class="QLabel" name="lblPWM1"><property name="text"><string>PWM1</string></property></widget></item>
+      <item><widget class="QSlider" name="sldPWM1"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property></widget></item>
+      <item><widget class="QLabel" name="lblValPWM1"><property name="text"><string>0</string></property></widget></item>
+      <item><widget class="QLabel" name="lblPWM2"><property name="text"><string>PWM2</string></property></widget></item>
+      <item><widget class="QSlider" name="sldPWM2"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property></widget></item>
+      <item><widget class="QLabel" name="lblValPWM2"><property name="text"><string>0</string></property></widget></item>
+     </layout>
+    </item>
+    <!-- Displays para ADC, temperatura, presión e inputs -->
+    <item>
+     <layout class="QGridLayout" name="gridLayout">
+      <item row="0" column="0"><widget class="QLabel" name="lblADC0"><property name="text"><string>ADC0</string></property></widget></item>
+      <item row="0" column="1"><widget class="QLCDNumber" name="lcdADC0"/></item>
+      <item row="0" column="2"><widget class="QLabel" name="lblADC1"><property name="text"><string>ADC1</string></property></widget></item>
+      <item row="0" column="3"><widget class="QLCDNumber" name="lcdADC1"/></item>
+      <item row="0" column="4"><widget class="QLabel" name="lblADC2"><property name="text"><string>ADC2</string></property></widget></item>
+      <item row="0" column="5"><widget class="QLCDNumber" name="lcdADC2"/></item>
+      <item row="1" column="0"><widget class="QLabel" name="lblTemp"><property name="text"><string>Temp (°C)</string></property></widget></item>
+      <item row="1" column="1"><widget class="QLCDNumber" name="lcdTemp"/></item>
+      <item row="1" column="2"><widget class="QLabel" name="lblPress"><property name="text"><string>Press (hPa)</string></property></widget></item>
+      <item row="1" column="3"><widget class="QLCDNumber" name="lcdPress"/></item>
+      <item row="2" column="0"><widget class="QLabel" name="lblInput1"><property name="text"><string>In 1</string></property></widget></item>
+      <item row="2" column="1"><widget class="QLabel" name="ledInput1"/></item>
+      <item row="2" column="2"><widget class="QLabel" name="lblInput2"><property name="text"><string>In 2</string></property></widget></item>
+      <item row="2" column="3"><widget class="QLabel" name="ledInput2"/></item>
+      <item row="2" column="4"><widget class="QLabel" name="lblInput3"><property name="text"><string>In 3</string></property></widget></item>
+      <item row="2" column="5"><widget class="QLabel" name="ledInput3"/></item>
+     </layout>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
