@@ -2,6 +2,7 @@
 #include "cmsis_os.h"
 #include <string.h>
 #include "bmp280_spi.h"
+#include "stm32f1xx_hal_dma.h"  // Incluir el encabezado DMA
 
 #define RS485_DE_PORT GPIOB
 #define RS485_DE_PIN  GPIO_PIN_9
@@ -11,6 +12,7 @@ SPI_HandleTypeDef hspi1;
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 TIM_HandleTypeDef htim1;
+DMA_HandleTypeDef hdma_adc1;  // Declaración completa del manejador DMA
 
 osThreadId defaultTaskHandle;
 osThreadId entradasTaskHandle;
@@ -20,6 +22,7 @@ osThreadId uartTaskHandle;
 uint8_t transmision[12] = {0};
 uint8_t recepcion[5] = {0x02, 0, 0, 0, 0};
 volatile uint8_t rx_ready = 0;
+uint16_t adc_buffer[3];  // Buffer para DMA ADC
 
 // Mutex para protección de recursos compartidos
 osMutexId transmisionMutex;
@@ -31,6 +34,7 @@ static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_DMA_Init(void);  // Prototipo agregado
 void StartDefaultTask(void const * argument);
 void StartEntradasTask(void const * argument);
 void StartUartTask(void const * argument);
@@ -73,6 +77,7 @@ int main(void) {
     SystemClock_Config();
 
     MX_GPIO_Init();
+    MX_DMA_Init();  // Inicializar DMA primero
     MX_USART1_UART_Init();
     MX_USART2_UART_Init();
     MX_SPI1_Init();
@@ -82,7 +87,7 @@ int main(void) {
     // Inicialización de periféricos
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1); // PA8
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3); // PA10
-    HAL_ADC_Start(&hadc1);
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 3); // Iniciar ADC con DMA
     BMP280_SPI_Init(&hspi1, GPIOA, GPIO_PIN_4);
 
     // Crear mutex para protección de buffer
@@ -93,13 +98,13 @@ int main(void) {
     HAL_UART_Receive_IT(&huart2, recepcion, sizeof(recepcion));
 
     // Creación de tareas
-    osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
+    osThreadDef(defaultTask, StartDefaultTask, osPriorityHigh, 0, 128);
     defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
     osThreadDef(entradasTask, StartEntradasTask, osPriorityAboveNormal, 0, 256);
     entradasTaskHandle = osThreadCreate(osThread(entradasTask), NULL);
 
-    osThreadDef(uartTask, StartUartTask, osPriorityHigh, 0, 128);
+    osThreadDef(uartTask, StartUartTask, osPriorityNormal, 0, 128);
     uartTaskHandle = osThreadCreate(osThread(uartTask), NULL);
 
     // Iniciar planificador
@@ -120,16 +125,17 @@ void StartDefaultTask(void const * argument) {
 }
 
 void StartEntradasTask(void const * argument) {
-    uint16_t valores_adc[3];
     float temp, press;
     uint32_t press_entero;
 
     for (;;) {
-        // Leer valores ADC
-        for (int i = 0; i < 3; i++) {
-            HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-            valores_adc[i] = HAL_ADC_GetValue(&hadc1);
-        }
+        // Copiar valores ADC de forma segura usando sección crítica
+        uint16_t local_adc[3];
+        taskENTER_CRITICAL();
+        local_adc[0] = adc_buffer[0];
+        local_adc[1] = adc_buffer[1];
+        local_adc[2] = adc_buffer[2];
+        taskEXIT_CRITICAL();
 
         // Leer entradas digitales
         uint8_t entradas_digitales = 0;
@@ -140,22 +146,23 @@ void StartEntradasTask(void const * argument) {
         // Leer sensor BMP280
         temp = BMP280_ReadTemperature();
         press = BMP280_ReadPressure();
-        press_entero = (uint32_t)press;
+        uint16_t press_entero = (uint16_t)(press * 10);
 
         // Actualizar buffer de transmisión con protección
         osMutexWait(transmisionMutex, osWaitForever);
 
         transmision[0] = 0x02;  // Byte de inicio
-        transmision[1] = valores_adc[0] & 0xFF;
-        transmision[2] = (valores_adc[0] >> 8) & 0xFF;
-        transmision[3] = valores_adc[1] & 0xFF;
-        transmision[4] = (valores_adc[1] >> 8) & 0xFF;
-        transmision[5] = valores_adc[2] & 0xFF;
-        transmision[6] = (valores_adc[2] >> 8) & 0xFF;
+        transmision[1] = local_adc[0] & 0xFF;         // ADC0 LSB
+        transmision[2] = (local_adc[0] >> 8) & 0xFF;  // ADC0 MSB
+        transmision[3] = local_adc[1] & 0xFF;         // ADC1 LSB
+        transmision[4] = (local_adc[1] >> 8) & 0xFF;  // ADC1 MSB
+        transmision[5] = local_adc[2] & 0xFF;         // ADC2 LSB
+        transmision[6] = (local_adc[2] >> 8) & 0xFF;  // ADC2 MSB
         transmision[7] = entradas_digitales;
         transmision[8] = (uint8_t)temp;
-        transmision[9] = (press_entero >> 8) & 0xFF;
-        transmision[10] = press_entero & 0xFF;
+        // Corrección de endianness para presión
+        transmision[9] = press_entero & 0xFF;          // LSB
+        transmision[10] = (press_entero >> 8) & 0xFF;  // MSB
         transmision[11] = calcular_crc(transmision, 11);
 
         osMutexRelease(transmisionMutex);
@@ -190,9 +197,11 @@ void StartUartTask(void const * argument) {
             HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, (local_recepcion[1] & 0x02) ? GPIO_PIN_SET : GPIO_PIN_RESET);
             HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, (local_recepcion[1] & 0x04) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
-            // Controlar PWM
-            __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, local_recepcion[2]);
-            __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, local_recepcion[3]);
+            // Controlar PWM con mayor precisión
+            uint16_t duty1 = (uint16_t)((local_recepcion[2] * 4095) / 255);
+            uint16_t duty2 = (uint16_t)((local_recepcion[3] * 4095) / 255);
+            __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty1);
+            __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, duty2);
 
             procesar_datos = 0;
         }
@@ -307,6 +316,7 @@ static void MX_ADC1_Init(void) {
     hadc1.Instance = ADC1;
     hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
     hadc1.Init.ContinuousConvMode = ENABLE;
+    // Eliminado: hadc1.Init.DMAContinuousRequests = ENABLE; (no existe en F1)
     hadc1.Init.DiscontinuousConvMode = DISABLE;
     hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
     hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
@@ -329,41 +339,36 @@ static void MX_ADC1_Init(void) {
     sConfig.Channel = ADC_CHANNEL_8;
     sConfig.Rank = ADC_REGULAR_RANK_3;
     HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+
+    HAL_ADCEx_Calibration_Start(&hadc1);  // Calibración ADC
 }
 
 static void MX_TIM1_Init(void) {
-    TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-    TIM_MasterConfigTypeDef sMasterConfig = {0};
+    __HAL_RCC_TIM1_CLK_ENABLE();
+
     TIM_OC_InitTypeDef sConfigOC = {0};
     TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
     htim1.Instance = TIM1;
-    htim1.Init.Prescaler = 71;
+    htim1.Init.Prescaler = 0;
     htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
     htim1.Init.Period = 4095;
     htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-    htim1.Init.RepetitionCounter = 0;
     htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
     HAL_TIM_Base_Init(&htim1);
 
-    sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-    HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig);
+    // PWM init
     HAL_TIM_PWM_Init(&htim1);
 
-    sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-    sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-    HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig);
-
+    // OC config (canal 1 y 3)
     sConfigOC.OCMode = TIM_OCMODE_PWM1;
     sConfigOC.Pulse = 0;
     sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-    sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
     sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-    sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
-    sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
     HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1);
     HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3);
 
+    // Configuración dead-time
     sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
     sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
     sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
@@ -373,3 +378,32 @@ static void MX_TIM1_Init(void) {
     sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
     HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig);
 }
+
+static void MX_DMA_Init(void) {
+    __HAL_RCC_DMA1_CLK_ENABLE();
+
+    hdma_adc1.Instance = DMA1_Channel1;
+    hdma_adc1.Init.Direction = DMA_PERIPH_TO_MEMORY;
+    hdma_adc1.Init.PeriphInc = DMA_PINC_DISABLE;
+    hdma_adc1.Init.MemInc = DMA_MINC_ENABLE;
+    hdma_adc1.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
+    hdma_adc1.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
+    hdma_adc1.Init.Mode = DMA_CIRCULAR;
+    hdma_adc1.Init.Priority = DMA_PRIORITY_HIGH;
+
+    if (HAL_DMA_Init(&hdma_adc1) != HAL_OK) {
+        Error_Handler();
+    }
+
+    __HAL_LINKDMA(&hadc1, DMA_Handle, hdma_adc1);
+}
+
+void Error_Handler(void) {
+    while(1) {
+        // Manejo de error (parpadeo LED, etc.)
+    }
+}
+
+
+
+
