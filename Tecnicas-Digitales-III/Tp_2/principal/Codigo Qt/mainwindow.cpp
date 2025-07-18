@@ -114,14 +114,22 @@ void MainWindow::processFrame(const QByteArray &f) {
     quint16 a0 = quint8(f[1]) | (quint8(f[2])<<8);
     quint16 a1 = quint8(f[3]) | (quint8(f[4])<<8);
     quint16 a2 = quint8(f[5]) | (quint8(f[6])<<8);
-    quint8 inp = quint8(f[7]); qint8 t = qint8(f[8]);
-    quint16 p = (quint8(f[9])<<8) | quint8(f[10]);
+    quint8 inp = quint8(f[7]);
+    qint8 t = qint8(f[8]);
+
+    // 1. Leer presión como valor little-endian
+    quint16 p_raw = quint8(f[9]) | (quint8(f[10]) << 8);
+
+    // 2. Convertir a valor flotante con 1 decimal
+    int pressure = p_raw /10 ;
 
     ui->lcdADC0->display(a0);
     ui->lcdADC1->display(a1);
     ui->lcdADC2->display(a2);
     ui->lcdTemp->display(t);
-    ui->lcdPress->display(p);
+
+    // 3. Mostrar presión como valor flotante
+    ui->lcdPress->display(pressure);
 
     auto setLed=[&](QLabel*L,bool on){
         L->setStyleSheet(on?"background-color:green;":"background-color:red;");
@@ -179,3 +187,4 @@ void MainWindow::on_chkOut2_toggled(bool)     { sendControlFrame(); }
 void MainWindow::on_chkOut3_toggled(bool)     { sendControlFrame(); }
 void MainWindow::on_sldPWM1_valueChanged(int v){ ui->lblValPWM1->setText(QString::number(v)); sendControlFrame(); }
 void MainWindow::on_sldPWM2_valueChanged(int v){ ui->lblValPWM2->setText(QString::number(v)); sendControlFrame(); }
+//si
