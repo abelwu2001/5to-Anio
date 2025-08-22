@@ -171,7 +171,11 @@ void MainWindow::sendControlFrame() {
     setRs485Direction(true);
     serial->write(f);
     serial->flush();
-    serial->waitForBytesWritten(50);
+    bool ok = serial->waitForBytesWritten(50);
+    if (!ok) {
+        ui->statusbar->showMessage("Timeout de transmisión", 2000);
+        return; // Mantener línea en TX hasta completar
+    }
     setRs485Direction(false);
 
     ui->lblValPWM1->setText(QString::number(ui->sldPWM1->value()));
