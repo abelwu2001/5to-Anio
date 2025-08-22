@@ -53,10 +53,18 @@ uint8_t calcular_crc(uint8_t* data, uint8_t length) {
 }
 
 // Función segura para transmisión RS485
+// Cambia la dirección del periférico half-duplex a transmisión y
+// luego vuelve a habilitar la recepción con interrupción.
 void RS485_Transmit(uint8_t* data, uint16_t size) {
+    // Asegurar modo transmisión
+    HAL_HalfDuplex_EnableTransmitter(&huart2);
     HAL_GPIO_WritePin(RS485_DE_PORT, RS485_DE_PIN, GPIO_PIN_SET);
     HAL_UART_Transmit(&huart2, data, size, HAL_MAX_DELAY);
     HAL_GPIO_WritePin(RS485_DE_PORT, RS485_DE_PIN, GPIO_PIN_RESET);
+
+    // Volver a modo recepción y rearmar interrupciones
+    HAL_HalfDuplex_EnableReceiver(&huart2);
+    HAL_UART_Receive_IT(&huart2, recepcion, sizeof(recepcion));
 }
 
 // Callback de recepción UART
@@ -80,6 +88,7 @@ int main(void) {
     MX_DMA_Init();  // Inicializar DMA primero
     MX_USART1_UART_Init();
     MX_USART2_UART_Init();
+    HAL_HalfDuplex_EnableReceiver(&huart2);
     MX_SPI1_Init();
     MX_ADC1_Init();
     MX_TIM1_Init();
