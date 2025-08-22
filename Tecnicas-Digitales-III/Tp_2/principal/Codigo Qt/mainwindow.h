@@ -40,6 +40,7 @@ private:
     void processFrame(const QByteArray &frame);
     quint8 computeCRC8(const QByteArray &data);
     void sendControlFrame();
+    void setRs485Direction(bool transmit);
 };
 
 #endif // MAINWINDOW_H

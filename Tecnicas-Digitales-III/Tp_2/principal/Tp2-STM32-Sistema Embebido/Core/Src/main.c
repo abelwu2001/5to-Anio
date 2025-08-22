@@ -53,10 +53,21 @@ uint8_t calcular_crc(uint8_t* data, uint8_t length) {
 }
 
 // Función segura para transmisión RS485
+// Cambia la dirección del periférico half-duplex a transmisión y
+// luego vuelve a habilitar la recepción con interrupción.
 void RS485_Transmit(uint8_t* data, uint16_t size) {
+    // Abortamos una posible recepción en curso antes de transmitir
+    HAL_UART_AbortReceive(&huart2);
+
+    // Asegurar modo transmisión
+    HAL_HalfDuplex_EnableTransmitter(&huart2);
     HAL_GPIO_WritePin(RS485_DE_PORT, RS485_DE_PIN, GPIO_PIN_SET);
     HAL_UART_Transmit(&huart2, data, size, HAL_MAX_DELAY);
     HAL_GPIO_WritePin(RS485_DE_PORT, RS485_DE_PIN, GPIO_PIN_RESET);
+
+    // Volver a modo recepción y rearmar interrupciones
+    HAL_HalfDuplex_EnableReceiver(&huart2);
+    HAL_UART_Receive_IT(&huart2, recepcion, sizeof(recepcion));
 }
 
 // Callback de recepción UART
@@ -80,6 +91,7 @@ int main(void) {
     MX_DMA_Init();  // Inicializar DMA primero
     MX_USART1_UART_Init();
     MX_USART2_UART_Init();
+    HAL_HalfDuplex_EnableReceiver(&huart2);
     MX_SPI1_Init();
     MX_ADC1_Init();
     MX_TIM1_Init();
@@ -126,7 +138,6 @@ void StartDefaultTask(void const * argument) {
 
 void StartEntradasTask(void const * argument) {
     float temp, press;
-    uint32_t press_entero;
 
     for (;;) {
         // Copiar valores ADC de forma segura usando sección crítica
@@ -279,7 +290,9 @@ static void MX_USART1_UART_Init(void) {
     huart1.Init.Mode = UART_MODE_TX_RX;
     huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
     huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-    HAL_UART_Init(&huart1);
+    if (HAL_UART_Init(&huart1) != HAL_OK) {
+        Error_Handler();
+    }
 }
 
 static void MX_USART2_UART_Init(void) {
@@ -291,7 +304,9 @@ static void MX_USART2_UART_Init(void) {
     huart2.Init.Mode = UART_MODE_TX_RX;
     huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
     huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-    HAL_HalfDuplex_Init(&huart2);
+    if (HAL_HalfDuplex_Init(&huart2) != HAL_OK) {
+        Error_Handler();
+    }
 }
 
 static void MX_SPI1_Init(void) {
@@ -307,7 +322,9 @@ static void MX_SPI1_Init(void) {
     hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
     hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
     hspi1.Init.CRCPolynomial = 10;
-    HAL_SPI_Init(&hspi1);
+    if (HAL_SPI_Init(&hspi1) != HAL_OK) {
+        Error_Handler();
+    }
 }
 
 static void MX_ADC1_Init(void) {
@@ -321,24 +338,32 @@ static void MX_ADC1_Init(void) {
     hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
     hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
     hadc1.Init.NbrOfConversion = 3;
-    HAL_ADC_Init(&hadc1);
+    if (HAL_ADC_Init(&hadc1) != HAL_OK) {
+        Error_Handler();
+    }
 
     sConfig.SamplingTime = ADC_SAMPLETIME_55CYCLES_5;
 
     // Canal 0 (PA0)
     sConfig.Channel = ADC_CHANNEL_0;
     sConfig.Rank = ADC_REGULAR_RANK_1;
-    HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+    if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+        Error_Handler();
+    }
 
     // Canal 1 (PA1)
     sConfig.Channel = ADC_CHANNEL_1;
     sConfig.Rank = ADC_REGULAR_RANK_2;
-    HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+    if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+        Error_Handler();
+    }
 
     // Canal 8 (PB0)
     sConfig.Channel = ADC_CHANNEL_8;
     sConfig.Rank = ADC_REGULAR_RANK_3;
-    HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+    if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+        Error_Handler();
+    }
 
     HAL_ADCEx_Calibration_Start(&hadc1);  // Calibración ADC
 }
@@ -355,18 +380,26 @@ static void MX_TIM1_Init(void) {
     htim1.Init.Period = 4095;
     htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
     htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-    HAL_TIM_Base_Init(&htim1);
+    if (HAL_TIM_Base_Init(&htim1) != HAL_OK) {
+        Error_Handler();
+    }
 
     // PWM init
-    HAL_TIM_PWM_Init(&htim1);
+    if (HAL_TIM_PWM_Init(&htim1) != HAL_OK) {
+        Error_Handler();
+    }
 
     // OC config (canal 1 y 3)
     sConfigOC.OCMode = TIM_OCMODE_PWM1;
     sConfigOC.Pulse = 0;
     sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
     sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-    HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1);
-    HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3);
+    if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
+        Error_Handler();
+    }
+    if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK) {
+        Error_Handler();
+    }
 
     // Configuración dead-time
     sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
@@ -376,7 +409,9 @@ static void MX_TIM1_Init(void) {
     sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
     sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
     sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-    HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig);
+    if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK) {
+        Error_Handler();
+    }
 }
 
 static void MX_DMA_Init(void) {

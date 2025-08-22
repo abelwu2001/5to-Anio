@@ -151,10 +151,12 @@ quint8 MainWindow::computeCRC8(const QByteArray &d) {
     return crc;
 }
 
+void MainWindow::setRs485Direction(bool transmit) {
+    serial->setRequestToSend(transmit);
+}
+
 void MainWindow::sendControlFrame() {
     if(mode!=CommMode::RS485||!serial->isOpen()) return;
-    serial->setFlowControl(QSerialPort::HardwareControl);
-    serial->setRequestToSend(true);
 
     QByteArray f;
     f.append(char(0x02));
@@ -166,12 +168,15 @@ void MainWindow::sendControlFrame() {
     f.append(char(ui->sldPWM2->value()));
     f.append(char(computeCRC8(f)));
 
+    setRs485Direction(true);
     serial->write(f);
     serial->flush();
-    serial->waitForBytesWritten(50);
-
-    serial->setRequestToSend(false);
-    serial->setFlowControl(QSerialPort::NoFlowControl);
+    bool ok = serial->waitForBytesWritten(50);
+    if (!ok) {
+        ui->statusbar->showMessage("Timeout de transmisión", 2000);
+        return; // Mantener línea en TX hasta completar
+    }
+    setRs485Direction(false);
 
     ui->lblValPWM1->setText(QString::number(ui->sldPWM1->value()));
     ui->lblValPWM2->setText(QString::number(ui->sldPWM2->value()));
