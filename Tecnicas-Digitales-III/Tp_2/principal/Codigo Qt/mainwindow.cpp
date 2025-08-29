@@ -2,6 +2,7 @@
 #include "ui_mainwindow.h"
 #include <QSerialPortInfo>
 #include <QDebug>
+#include <QThread>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -12,9 +13,9 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
-    // Rango 0–255 en sliders
-    ui->sldPWM1->setRange(0, 255);
-    ui->sldPWM2->setRange(0, 255);
+    // Rango 0–1024 en sliders (10 bits)
+    ui->sldPWM1->setRange(0, 1024);
+    ui->sldPWM2->setRange(0, 1024);
 
     // Puertos y baudrates
     for (const QSerialPortInfo &p : QSerialPortInfo::availablePorts())
@@ -39,13 +40,13 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::on_cbMode_currentIndexChanged(int idx) {
+    // Registrar modo pero mantener todos los controles habilitados
     mode = (idx == 0 ? CommMode::RS232 : CommMode::RS485);
-    bool ctrl = (mode == CommMode::RS485);
-    ui->chkOut1->setEnabled(ctrl);
-    ui->chkOut2->setEnabled(ctrl);
-    ui->chkOut3->setEnabled(ctrl);
-    ui->sldPWM1->setEnabled(ctrl);
-    ui->sldPWM2->setEnabled(ctrl);
+    ui->chkOut1->setEnabled(true);
+    ui->chkOut2->setEnabled(true);
+    ui->chkOut3->setEnabled(true);
+    ui->sldPWM1->setEnabled(true);
+    ui->sldPWM2->setEnabled(true);
 }
 
 void MainWindow::onBaudRateChanged(const QString &baud) {
@@ -78,11 +79,10 @@ void MainWindow::on_btnConnect_clicked() {
         }
         ui->btnConnect->setText("Desconectar");
         ui->statusbar->showMessage("Conectado a " + serial->portName(), 2000);
+        setRs485Direction(false); // iniciar en modo recepción
 
-        if (mode == CommMode::RS485) {
-            sendControlFrame();
-            pollTimer->start(1000);
-        }
+        sendControlFrame();
+        pollTimer->start(1000);
     }
 }
 
@@ -97,12 +97,17 @@ void MainWindow::handleError(QSerialPort::SerialPortError err) {
 
 void MainWindow::readSerialData() {
     recvBuffer.append(serial->readAll());
-    while (recvBuffer.size() >= 12) {
-        if (quint8(recvBuffer[0]) != 0x02) { recvBuffer.remove(0,1); continue; }
-        QByteArray frame = recvBuffer.left(12);
-        if (computeCRC8(frame.left(11)) == quint8(frame[11])) {
+    // Tramas de 13 bytes: 1 cabecera + 10 datos + 2 CRC16
+    while (recvBuffer.size() >= 13) {
+        if (quint8(recvBuffer[0]) != 0x02) {
+            recvBuffer.remove(0,1);
+            continue;
+        }
+        QByteArray frame = recvBuffer.left(13);
+        quint16 crc_recv = quint8(frame[11]) | (quint8(frame[12]) << 8);
+        if (computeCRC16(frame.left(11)) == crc_recv) {
             processFrame(frame);
-            recvBuffer.remove(0,12);
+            recvBuffer.remove(0,13);
         } else {
             recvBuffer.remove(0,1);
             ui->statusbar->showMessage("CRC Error",2000);
@@ -114,22 +119,15 @@ void MainWindow::processFrame(const QByteArray &f) {
     quint16 a0 = quint8(f[1]) | (quint8(f[2])<<8);
     quint16 a1 = quint8(f[3]) | (quint8(f[4])<<8);
     quint16 a2 = quint8(f[5]) | (quint8(f[6])<<8);
-    quint8 inp = quint8(f[7]);
-    qint8 t = qint8(f[8]);
-
-    // 1. Leer presión como valor little-endian
-    quint16 p_raw = quint8(f[9]) | (quint8(f[10]) << 8);
-
-    // 2. Convertir a valor flotante con 1 decimal
-    int pressure = p_raw /10;
+    quint8  inp = quint8(f[7]);
+    qint8   t   = qint8(f[8]);
+    quint16 p   = (quint8(f[9]) << 8) | quint8(f[10]);
 
     ui->lcdADC0->display(a0);
     ui->lcdADC1->display(a1);
     ui->lcdADC2->display(a2);
     ui->lcdTemp->display(t);
-
-    // 3. Mostrar presión como valor flotante
-    ui->lcdPress->display(pressure);
+    ui->lcdPress->display(p);
 
     auto setLed=[&](QLabel*L,bool on){
         L->setStyleSheet(on?"background-color:green;":"background-color:red;");
@@ -143,41 +141,65 @@ void MainWindow::processFrame(const QByteArray &f) {
     ui->txtRawData->append(hex.trimmed().toUpper());
 }
 
-quint8 MainWindow::computeCRC8(const QByteArray &d) {
-    quint8 crc=0;
-    for(auto b:d){ crc^=quint8(b);
-        for(int i=0;i<8;i++) crc=(crc&0x80)?(crc<<1)^0x07:(crc<<1);
+quint16 MainWindow::computeCRC16(const QByteArray &data) {
+    quint16 crc = 0xFFFF;
+    for (quint8 b : data) {
+        crc ^= quint16(b);
+        for (int i = 0; i < 8; ++i) {
+            if (crc & 0x0001)
+                crc = (crc >> 1) ^ 0xA001;
+            else
+                crc >>= 1;
+        }
     }
     return crc;
 }
 
+void MainWindow::setRs485Direction(bool transmit) {
+    serial->setRequestToSend(transmit);
+    serial->setDataTerminalReady(transmit);
+}
+
 void MainWindow::sendControlFrame() {
-    if(mode!=CommMode::RS485||!serial->isOpen()) return;
-    serial->setFlowControl(QSerialPort::HardwareControl);
-    serial->setRequestToSend(true);
+    if (!serial->isOpen()) return;
+
+    quint16 pwm1 = ui->sldPWM1->value();
+    quint16 pwm2 = ui->sldPWM2->value();
+    quint8 mask = (ui->chkOut1->isChecked()?0x01:0x00)
+                | (ui->chkOut2->isChecked()?0x02:0x00)
+                | (ui->chkOut3->isChecked()?0x04:0x00);
 
     QByteArray f;
     f.append(char(0x02));
-    quint8 m = (ui->chkOut1->isChecked()?1:0)
-               |(ui->chkOut2->isChecked()?2:0)
-               |(ui->chkOut3->isChecked()?4:0);
-    f.append(char(m));
-    f.append(char(ui->sldPWM1->value()));
-    f.append(char(ui->sldPWM2->value()));
-    f.append(char(computeCRC8(f)));
+    f.append(char(mask));
+    f.append(char(pwm1 & 0xFF));
+    f.append(char((pwm1 >> 8) & 0xFF));
+    f.append(char(pwm2 & 0xFF));
+    f.append(char((pwm2 >> 8) & 0xFF));
+    quint16 crc = computeCRC16(f);
+    f.append(char(crc & 0xFF));
+    f.append(char((crc >> 8) & 0xFF));
 
+    if (mode == CommMode::RS485) {
+        setRs485Direction(true);
+        QThread::msleep(1);
+    }
     serial->write(f);
-    serial->flush();
-    serial->waitForBytesWritten(50);
+    bool ok = serial->waitForBytesWritten(50);
+    if (mode == CommMode::RS485) {
+        QThread::msleep(1);
+        setRs485Direction(false);
+    }
+    if (!ok) {
+        ui->statusbar->showMessage("Timeout de transmisión", 2000);
+    }
 
-    serial->setRequestToSend(false);
-    serial->setFlowControl(QSerialPort::NoFlowControl);
-
-    ui->lblValPWM1->setText(QString::number(ui->sldPWM1->value()));
-    ui->lblValPWM2->setText(QString::number(ui->sldPWM2->value()));
+    ui->lblValPWM1->setText(QString::number(pwm1));
+    ui->lblValPWM2->setText(QString::number(pwm2));
 
     QString txHex;
-    for(auto b:f) txHex += QString("%1 ").arg(quint8(b),2,16,QLatin1Char('0'));
+    for (auto b : f)
+        txHex += QString("%1 ").arg(quint8(b),2,16,QLatin1Char('0'));
     ui->txtRawData->append("TX: " + txHex.trimmed().toUpper());
 }
 
